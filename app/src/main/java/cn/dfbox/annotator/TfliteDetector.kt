@@ -12,19 +12,21 @@ class TfliteDetector(assets: AssetManager, assetName: String) : Detector {
 
     override val backend: String = "TFLite"
 
+    private val modelBuffer: ByteBuffer
     private val interpreter: Interpreter
     private val nhwc: Boolean
     private val inputSize: Int
     private val channels: Int
     private val anchors: Int
     private val transposed: Boolean
+    private val inBuffer: ByteBuffer
     private val outBuffer: ByteBuffer
 
     init {
-        val model = loadModel(assets, assetName)
+        modelBuffer = loadModel(assets, assetName)
         val options = Interpreter.Options()
         options.setNumThreads(Runtime.getRuntime().availableProcessors().coerceIn(2, 4))
-        interpreter = Interpreter(model, options)
+        interpreter = Interpreter(modelBuffer, options)
 
         val inTensor = interpreter.getInputTensor(0)
         require(inTensor.dataType() == DataType.FLOAT32) {
@@ -46,6 +48,7 @@ class TfliteDetector(assets: AssetManager, assetName: String) : Detector {
             anchors = outShape[1]
             transposed = true
         }
+        inBuffer = ByteBuffer.allocateDirect(inputSize * inputSize * 3 * 4).order(ByteOrder.nativeOrder())
         outBuffer = ByteBuffer.allocateDirect(channels * anchors * 4).order(ByteOrder.nativeOrder())
     }
 
@@ -66,7 +69,7 @@ class TfliteDetector(assets: AssetManager, assetName: String) : Detector {
         lb.bitmap.recycle()
         val t1 = SystemClock.elapsedRealtime()
 
-        val inBuffer = ByteBuffer.allocateDirect(data.size * 4).order(ByteOrder.nativeOrder())
+        inBuffer.rewind()
         inBuffer.asFloatBuffer().put(data)
         inBuffer.rewind()
         outBuffer.rewind()

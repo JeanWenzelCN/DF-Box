@@ -84,6 +84,7 @@ class MainActivity : AppCompatActivity() {
                 val kind = DetectorKind.values()[position]
                 if (kind != detectorKind) {
                     detectorKind = kind
+                    inferJob?.cancel()
                     detector?.close()
                     detector = null
                     if (source != null) runInference()
