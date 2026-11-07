@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DF-Box 标注</string>
+    <string name="title">DF-Box · 图片标注测试</string>
+    <string name="hint_pick">点「选择图片」开始</string>
+    <string name="btn_pick">选择图片</string>
+    <string name="btn_save">保存标注</string>
+    <string name="label_conf">置信度</string>
+    <string name="conf_default">0.25</string>
+    <string name="status_idle">yolo11n_dfv15 · 类别 enemy / teammate</string>
+    <string name="status_running">推理中…</string>
+    <string name="status_failed">推理失败：%1$s %2$s</string>
+    <string name="status_saved">保存 %1$s</string>
+    <string name="toast_saved">已保存：%1$s</string>
+    <string name="toast_decode_failed">图片读取失败</string>
+    <string name="cd_image">待检测图片</string>
+</resources>
