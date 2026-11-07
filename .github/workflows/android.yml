@@ -27,17 +27,25 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Set up Gradle 8.7
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
 
+      # runner 自带 Android SDK，只做环境记录，不再额外安装
+      - name: Record Android SDK environment
+        run: |
+          {
+            echo "ANDROID_HOME=${ANDROID_HOME:-<unset>}"
+            echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-<unset>}"
+            echo "JAVA_HOME=${JAVA_HOME:-<unset>}"
+            ls "${ANDROID_HOME:-/usr/local/lib/android/sdk}/platforms" 2>&1 || true
+            ls "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" 2>&1 || true
+          } | tee build.log
+
       - name: Build debug APK
         run: |
-          gradle --no-daemon --console=plain :app:assembleDebug 2>&1 | tee build.log
+          gradle --no-daemon --console=plain --stacktrace :app:assembleDebug 2>&1 | tee -a build.log
 
       - name: Show build log tail
         if: always()
