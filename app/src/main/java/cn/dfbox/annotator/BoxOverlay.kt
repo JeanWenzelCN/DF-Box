@@ -39,7 +39,7 @@ class BoxOverlay @JvmOverloads constructor(
             offsetY = offsetY,
             strokeWidth = dp(2f),
             textSize = dp(11f),
-            labels = Detectors.LABELS
+            labels = ModelAssets.LABELS
         )
     }
 

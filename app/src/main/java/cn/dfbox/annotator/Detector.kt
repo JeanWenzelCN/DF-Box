@@ -6,6 +6,8 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -25,19 +27,30 @@ data class InferenceResult(
     val preprocessMs: Long,
     val inferenceMs: Long,
     val postprocessMs: Long,
-    val backend: String,
+    val backendLabel: String,
     val inputLayout: String
 )
 
 interface Detector {
-    val backend: String
+    val backendLabel: String
     fun detect(src: Bitmap, confThreshold: Float, iouThreshold: Float = 0.45f): InferenceResult
     fun close()
 }
 
-enum class DetectorKind(val label: String) {
-    ONNX("ONNX"),
-    TFLITE("TFLite")
+object ModelAssets {
+
+    /** w8a16（int8 权重 + fp16 激活）LiteRT 导出，输入输出仍为 float32 */
+    const val TFLITE = "yolo11n_dfv15_w8a16.tflite"
+
+    val LABELS = arrayOf("enemy", "teammate")
+
+    fun load(assets: AssetManager): ByteBuffer {
+        val bytes = assets.open(TFLITE).use { it.readBytes() }
+        val buffer = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
+        buffer.put(bytes)
+        buffer.rewind()
+        return buffer
+    }
 }
 
 /** letterbox 结果：640×640 输入图 + 还原到原图所需的缩放/填充参数 */
@@ -105,7 +118,7 @@ object YoloPostProcess {
 
     /**
      * 解析 [1, 4+nc, anchors] 的 YOLO 输出。
-     * 坐标单位自动判定：ONNX 导出通常为像素（0..imgsz），TFLite 导出为归一化（0..1）。
+     * 坐标单位自动判定：像素坐标（0..imgsz）或归一化（0..1）。
      */
     fun decode(
         out: FloatArray,
@@ -193,18 +206,5 @@ object YoloPostProcess {
             }
         }
         return kept
-    }
-}
-
-object Detectors {
-
-    val LABELS = arrayOf("enemy", "teammate")
-
-    const val ONNX_ASSET = "yolo11n_dfv15.onnx"
-    const val TFLITE_ASSET = "yolo11n_dfv15.tflite"
-
-    fun create(assets: AssetManager, kind: DetectorKind): Detector = when (kind) {
-        DetectorKind.ONNX -> OrtDetector(assets, ONNX_ASSET)
-        DetectorKind.TFLITE -> TfliteDetector(assets, TFLITE_ASSET)
     }
 }

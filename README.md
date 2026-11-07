@@ -1,52 +1,52 @@
 # DF-Box
 
-Android 图片标注极简测试 App（Kotlin）。选一张图 → 端上跑 yolo11n_dfv15 → 把 enemy / teammate 的框和置信度画在图上。
+Android 图片标注测试 App（Kotlin + Material 3）。选一张图 → 端上跑 `yolo11n_dfv15` w8a16 量化模型 → 画 enemy / teammate 框 → 导出标注图。
 
-所有构建都在 GitHub Actions 上完成，本地不装 Android SDK。
+构建全部在 GitHub Actions 上完成，本地不装 Android SDK。
 
-## 功能
+## 这一版做了什么
 
-- 图库选图（`ACTION_GET_CONTENT`），最长边超 2048 像素时自动降采样
-- 双后端可切换：`ONNX Runtime`（onnxruntime-android 1.19.2）/ `TFLite`（tensorflow-lite 2.16.1）
-- letterbox 到 640×640，输入布局自动识别（NHWC / NCHW），坐标单位自动识别（像素 / 归一化）
-- 置信度阈值滑杆（0.05–0.95，默认 0.25），类别内 NMS（IoU 0.45）
-- 状态栏显示：目标数、分类计数、预处理 / 推理 / 后处理耗时、实际输入布局
-- 「保存标注」把画好框的图写到 `Android/data/cn.dfbox.annotator/files/Pictures/DFBox/`
+- 模型换成 `exports/w8a16/yolo11n_dfv15_w8a16.tflite`（int8 权重 + fp16 激活，3.0 MB；输入输出仍为 float32）
+- **NPU 优先**：默认 NNAPI delegate（`setUseNnapiCpu(false)`），创建失败或不支持时自动回落 XNNPACK CPU，状态栏显示实际生效的后端
+- **后端测速**：每个后端各跑 12 轮纯推理，出 avg / p50 / p95 / fps / 首次耗时，可一键采用更快者
+- **输入处理分辨率**：320 / 480 / 640 / 960（长边），影响解码后的缩放与预处理开销；模型输入固定 640×640
+- **首次使用引导**：说明用法 + 引导去设置后端与分辨率，配置写进 SharedPreferences
+- Material 3：MaterialToolbar + 菜单、MaterialCardView、Material Slider、MaterialAlertDialog
+- APK 只打 `arm64-v8a`，体积从 49 MB 降到约 14 MB
 
-## 模型
-
-`app/src/main/assets/` 下内置两个导出，均来自 `dfv15_v2` best.pt（ultralytics 8.4.203，imgsz 640）：
-
-| 文件 | 输入 | 输出 |
-| --- | --- | --- |
-| `yolo11n_dfv15.onnx` | `images` [1,640,640,3] float32 NHWC /255 | `output0` [1,6,8400]，cx,cy,w,h 为像素坐标 |
-| `yolo11n_dfv15.tflite` | `serving_default_args_0` [1,3,640,640] float32 NCHW /255 | [1,6,8400]，cx,cy,w,h 已归一化到 0–1 |
-
-类别：`{0: enemy, 1: teammate}`。两种导出都是 xywh + 已过 sigmoid 的类别分，所以后处理只做单位还原、置信度过滤和 NMS。
-
-## 构建
-
-推送到 `main` 触发 [`.github/workflows/android.yml`](.github/workflows/android.yml)：
-
-1. JDK 17 + Android SDK + Gradle 8.7
-2. `gradle :app:assembleDebug`
-3. APK 上传为 artifact，同时发布到 [Releases](https://github.com/JeanWenzelCN/DF-Box/releases)（tag `latest`）
-4. 完整构建日志强制推送到 `ci-log` 分支（`build.log.txt`），构建失败也能直接看日志
-
-APK 只打 `arm64-v8a`（ORT 的 `libonnxruntime.so` 单个 ABI 就 17 MB）。
-
-## 目录
+## 代码结构
 
 ```
 app/src/main/java/cn/dfbox/annotator/
-├── MainActivity.kt      # 选图 / 推理协程 / 保存
-├── Detector.kt          # Detection、letterbox、后处理 + NMS、后端工厂
-├── OrtDetector.kt       # ONNX Runtime 后端
-├── TfliteDetector.kt    # TFLite 后端
+├── MainActivity.kt      # 选图 / 推理 / 设置 / 测速 / 保存
+├── Detector.kt          # Detection、ModelAssets、letterbox、后处理 + NMS
+├── TfliteDetector.kt    # LiteRT 后端（NNAPI 优先，失败回落 CPU）
+├── Benchmark.kt         # 双后端测速
+├── Prefs.kt             # 设置项 + Backend 枚举 + 测速用测试图
 ├── BoxRenderer.kt       # 画框与标签
 └── BoxOverlay.kt        # fitCenter 坐标换算的覆盖层
 ```
 
+## 模型 IO（已在本机用 Python 实测核对）
+
+| 项 | 值 |
+| --- | --- |
+| 文件 | `yolo11n_dfv15_w8a16.tflite`（ultralytics 8.4.204，imgsz 640） |
+| 输入 | `serving_default_args_0` [1,3,640,640] float32，NCHW，/255 |
+| 输出 | [1,6,8400] float32，cx,cy,w,h **已归一化到 0–1**，后接已过 sigmoid 的类别分 |
+| 类别 | `{0: enemy, 1: teammate}` |
+
+`exports/w8a16/yolo11n_dfv15_qnn.onnx` 没有打进 APK：它是 ONNX Runtime QNN EP 的 **EPContext** 预编译模型（整张图只有一个 `EPContext` 节点，元数据标记 QNN EP v2.51 / HTP），必须配 QNN runtime 才能执行；标准 `onnxruntime-android` 的 CPU/NNAPI EP 跑不了它。要上 HTP 得走 Qualcomm QNN SDK 自己编 runtime + 传 context binary，不在这一版范围。
+
+## 构建
+
+推 `main` 触发 [`.github/workflows/android.yml`](.github/workflows/android.yml)：
+
+1. JDK 17 + Gradle 8.7（Android SDK 用 runner 自带的）
+2. `gradle :app:assembleDebug`
+3. APK 上传 artifact + 发布到 [Releases](https://github.com/JeanWenzelCN/DF-Box/releases)（tag `latest`）
+4. 完整构建日志强推到 `ci-log` 分支（`build.log.txt`），失败也能直接拉日志
+
 ## 说明
 
-测试用途，未做混淆、未做 EXIF 方向校正；日志与耗时以真机实测为准。
+测试用途，未做混淆、未做 EXIF 方向校正。NNAPI 是否真下沉到 NPU 取决于 SoC 驱动与算子覆盖，以「后端测速」实测为准。

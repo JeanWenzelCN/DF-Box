@@ -5,15 +5,19 @@ import android.graphics.Bitmap
 import android.os.SystemClock
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.nnapi.NnApiDelegate
 import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
-class TfliteDetector(assets: AssetManager, assetName: String) : Detector {
+/**
+ * LiteRT 后端。NNAPI 优先：创建 delegate 失败或设备不支持时自动回落 XNNPACK CPU。
+ */
+class TfliteDetector(assets: AssetManager, backend: Backend) : Detector {
 
-    override val backend: String = "TFLite"
-
-    private val modelBuffer: ByteBuffer
+    private val modelBuffer: ByteBuffer = ModelAssets.load(assets)
+    private val nnApiDelegate: NnApiDelegate?
     private val interpreter: Interpreter
+    private val delegated: Boolean
+
     private val nhwc: Boolean
     private val inputSize: Int
     private val channels: Int
@@ -22,11 +26,34 @@ class TfliteDetector(assets: AssetManager, assetName: String) : Detector {
     private val inBuffer: ByteBuffer
     private val outBuffer: ByteBuffer
 
+    override val backendLabel: String
+        get() = if (delegated) "NNAPI" else "CPU"
+
     init {
-        modelBuffer = loadModel(assets, assetName)
-        val options = Interpreter.Options()
-        options.setNumThreads(Runtime.getRuntime().availableProcessors().coerceIn(2, 4))
-        interpreter = Interpreter(modelBuffer, options)
+        var delegate: NnApiDelegate? = null
+        var created: Interpreter? = null
+
+        if (backend == Backend.NNAPI) {
+            try {
+                val options = NnApiDelegate.Options().setUseNnapiCpu(false)
+                delegate = NnApiDelegate(options)
+                val interpreterOptions = Interpreter.Options()
+                interpreterOptions.setNumThreads(threads())
+                interpreterOptions.addDelegate(delegate)
+                created = Interpreter(modelBuffer, interpreterOptions)
+            } catch (t: Throwable) {
+                runCatching { delegate?.close() }
+                delegate = null
+                created = null
+            }
+        }
+
+        nnApiDelegate = delegate
+        delegated = delegate != null
+        interpreter = created ?: Interpreter(
+            modelBuffer,
+            Interpreter.Options().setNumThreads(threads())
+        )
 
         val inTensor = interpreter.getInputTensor(0)
         require(inTensor.dataType() == DataType.FLOAT32) {
@@ -48,8 +75,9 @@ class TfliteDetector(assets: AssetManager, assetName: String) : Detector {
             anchors = outShape[1]
             transposed = true
         }
-        inBuffer = ByteBuffer.allocateDirect(inputSize * inputSize * 3 * 4).order(ByteOrder.nativeOrder())
-        outBuffer = ByteBuffer.allocateDirect(channels * anchors * 4).order(ByteOrder.nativeOrder())
+
+        inBuffer = ByteBuffer.allocateDirect(inputSize * inputSize * 3 * 4)
+        outBuffer = ByteBuffer.allocateDirect(channels * anchors * 4)
     }
 
     override fun detect(src: Bitmap, confThreshold: Float, iouThreshold: Float): InferenceResult {
@@ -91,21 +119,14 @@ class TfliteDetector(assets: AssetManager, assetName: String) : Detector {
             preprocessMs = t1 - t0,
             inferenceMs = t2 - t1,
             postprocessMs = t3 - t2,
-            backend = backend,
+            backendLabel = backendLabel,
             inputLayout = "$layout · float32 /255"
         )
     }
 
     override fun close() {
-        interpreter.close()
-    }
-
-    private fun loadModel(assets: AssetManager, assetName: String): ByteBuffer {
-        val bytes = assets.open(assetName).use { it.readBytes() }
-        val buffer = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
-        buffer.put(bytes)
-        buffer.rewind()
-        return buffer
+        runCatching { interpreter.close() }
+        runCatching { nnApiDelegate?.close() }
     }
 
     /** [1, anchors, channels] -> [1, channels, anchors] */
@@ -119,4 +140,6 @@ class TfliteDetector(assets: AssetManager, assetName: String) : Detector {
         }
         return out
     }
+
+    private fun threads(): Int = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
 }
